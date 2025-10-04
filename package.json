@@ -1,0 +1,20 @@
+{
+  "name": "steam-farmer-server",
+  "version": "1.0.0",
+  "description": "Servidor para o farmer de horas da Steam.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "steam",
+    "api"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "steam-user": "^5.0.0"
+  }
+}
