@@ -1,4 +1,4 @@
-// server.js - VERSÃO 100% COMPLETA E CORRIGIDA
+// server.js - VERSÃO FINAL, COMPLETA E REVISADA
 
 const express = require('express');
 const path = require('path');
@@ -7,7 +7,6 @@ const https = require('https');
 const SteamUser = require('steam-user');
 
 const app = express();
-// const port = 3000;
 const port = process.env.PORT || 3000;
 app.use(express.json());
 
@@ -87,7 +86,7 @@ function setupSteamClientEvents(username, client) {
         if (err.eresult === SteamUser.EResult.InvalidPassword && account) {
             console.log(`-> Recebido InvalidPassword para ${username}. Limpando loginKey e sinalizando para relogin.`);
             account.loginKey = null;
-            account.loginKeyInvalid = true; // NOVO SINALIZADOR
+            account.loginKeyInvalid = true; // SINALIZADOR PARA O FRONT-END
             savePersistentAccounts();
         }
         clientData.isLoggingIn = false;
@@ -154,7 +153,6 @@ function savePersistentAccounts() {
 
 function initializeClients() {
     accountsData.forEach(acc => {
-        // Reseta o sinalizador ao iniciar o servidor, para permitir nova tentativa de login
         if (acc.loginKeyInvalid) acc.loginKeyInvalid = false;
         if (!steamClients[acc.username]) {
             const client = new SteamUser({ dataDirectory: null });
@@ -267,5 +265,3 @@ loadPersistentAccounts();
 app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor rodando em http://localhost:${port}`);
 });
-
-// criado, compilado e desenvolvido por covil.dev =)
