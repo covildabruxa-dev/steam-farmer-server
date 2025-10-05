@@ -1,15 +1,19 @@
+// server.js - VERSÃO CORRIGIDA PARA O ERRO '...map is not a function'
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const SteamUser = require('steam-user');
 
+
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
 
-const ACCOUNTS_FILE = path.join(__dirname, 'accounts.json');
-const SENTRY_DIR = path.join(__dirname, 'sentry');
+const DATA_DIR = process.env.RENDER_DISK_MOUNT_PATH || __dirname;
+const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
+const SENTRY_DIR = path.join(DATA_DIR, 'sentry');
 const steamClients = {};
 let accountsData = [];
 const TRACKING_INTERVAL = 60000; // 1 minuto
@@ -28,15 +32,26 @@ setInterval(() => {
                         activeGamesToFarm.push({ game_id: game.appid });
 
                         if (game.goalMinutes > 0 && game.farmedMinutes >= game.goalMinutes) {
-                            console.log(`🎉 Meta atingida para '${account.displayName}' no jogo ${game.appid}!`);
-                            if (!account.completedGoals) account.completedGoals = [];
-                            account.completedGoals.push({ appid: game.appid, date: new Date().toISOString() });
+                            const goalAlreadyCompleted = account.completedGoals?.some(g => g.appid === game.appid);
+                            if (!goalAlreadyCompleted) {
+                                console.log(`🎉 Meta atingida para '${account.displayName}' no jogo ${game.appid}!`);
+                                if (!account.completedGoals) account.completedGoals = [];
+                                account.completedGoals.push({ appid: game.appid, date: new Date().toISOString() });
+                            }
                         }
                     }
                 });
-                if (JSON.stringify(clientData.client.gamesPlayed.map(g => g.game_id).sort()) !== JSON.stringify(activeGamesToFarm.map(g => g.game_id).sort())) {
+
+                // --- CORREÇÃO: Compara com a lista de jogos que NÓS estamos controlando ---
+                const currentFarmingIds = (clientData.currentlyFarming || []).map(g => g.game_id).sort();
+                const newFarmingIds = activeGamesToFarm.map(g => g.game_id).sort();
+
+                if (JSON.stringify(currentFarmingIds) !== JSON.stringify(newFarmingIds)) {
                     clientData.client.gamesPlayed(activeGamesToFarm);
+                    // --- CORREÇÃO: Atualiza nossa lista local de jogos farmados ---
+                    clientData.currentlyFarming = activeGamesToFarm;
                 }
+
                 if (activeGamesToFarm.length === 0 && clientData.isFarming) {
                     console.log(`✅ Todas as metas atingidas para '${account.displayName}'. Parando farm.`);
                     stopFarming(account.username);
@@ -51,7 +66,7 @@ setInterval(() => {
 
 function getGameDetails(appid) {
     return new Promise((resolve) => {
-        https.get(`https://store.steampowered.com/api/appdetails?appids=${appid}`, (res) => {
+        https.get(`https://store.steampowered.com/api/appdetails?appids=${appid}&l=brazilian`, (res) => { // l=brazilian para nomes em PT-BR
             let data = '';
             res.on('data', (chunk) => { data += chunk; });
             res.on('end', () => {
@@ -59,7 +74,7 @@ function getGameDetails(appid) {
                     const json = JSON.parse(data);
                     const defaultResponse = { name: `Jogo (${appid})`, headerImage: null };
                     if (json[appid] && json[appid].success) {
-                        resolve({ name: json[appid].data.name, headerImage: json[appid].data.header_image });
+                        resolve({ name: `${json[appid].data.name} (${appid})`, headerImage: json[appid].data.header_image });
                     } else { resolve(defaultResponse); }
                 } catch (e) { resolve(defaultResponse); }
             });
@@ -85,12 +100,17 @@ async function startFarming(username) {
         } else {
             gamesToFarm = account.appids.map(g => ({ game_id: g.appid }));
         }
-        clientData.client.setPersona(SteamUser.EPersonaState.Online);
+        
+        const personaState = account.isFarmingOffline ? SteamUser.EPersonaState.Offline : SteamUser.EPersonaState.Online;
+        clientData.client.setPersona(personaState);
         clientData.client.gamesPlayed(gamesToFarm);
 
-        await fetchAndAssignGameDetails(account);
+        // --- CORREÇÃO: Salva o estado dos jogos que estamos farmando ---
+        clientData.currentlyFarming = gamesToFarm;
 
-        console.log(`▶️ Iniciando/Retomando farm para '${username}'.`);
+        await fetchAndAssignGameDetails(account);
+        
+        console.log(`▶️ Iniciando farm para '${username}' no modo ${account.isFarmingOffline ? 'Offline' : 'Online'}.`);
         savePersistentAccounts();
     }
 }
@@ -98,8 +118,15 @@ async function startFarming(username) {
 function stopFarming(username) {
     const clientData = steamClients[username];
     if (clientData) {
-        if (clientData.client.steamID) clientData.client.gamesPlayed([]);
+        if (clientData.client.steamID) {
+             clientData.client.gamesPlayed([]);
+             clientData.client.setPersona(SteamUser.EPersonaState.Online);
+        }
         clientData.isFarming = false;
+        
+        // --- CORREÇÃO: Limpa o nosso estado de jogos farmados ---
+        clientData.currentlyFarming = [];
+
         console.log(`⏹️ Farm parado para '${username}'.`);
         savePersistentAccounts();
     }
@@ -110,6 +137,9 @@ function loginAccount(username, password = null, isInitialLogin = false) {
     if (!clientData || clientData.isLoggingIn) return;
     const account = accountsData.find(acc => acc.username === username);
     if (!account) return;
+    
+    account.loginKeyInvalid = false;
+
     const logOnOptions = { accountName: username };
     if (isInitialLogin && password) {
         logOnOptions.password = password;
@@ -133,9 +163,9 @@ function setupSteamClientEvents(username, client) {
         const account = accountsData.find(acc => acc.username === username);
 
         if (err.eresult === SteamUser.EResult.InvalidPassword && account) {
-            console.log(`-> Recebido InvalidPassword para ${username}. Limpando loginKey e sinalizando para relogin.`);
+            console.log(`-> Senha/Sessão inválida para ${username}. Limpando loginKey e sinalizando para relogin.`);
             account.loginKey = null;
-            account.loginKeyInvalid = true;
+            account.loginKeyInvalid = true; 
             savePersistentAccounts();
         }
         clientData.isLoggingIn = false;
@@ -150,6 +180,7 @@ function setupSteamClientEvents(username, client) {
             if (account.loginKeyInvalid) {
                 account.loginKeyInvalid = false;
             }
+            clientData.client.setPersona(SteamUser.EPersonaState.Online);
             fetchAndAssignGameDetails(account);
             console.log(`✅ '${username}' logado.`);
             if (clientData.isFarming) {
@@ -178,15 +209,15 @@ function setupSteamClientEvents(username, client) {
     });
 
     client.on('disconnected', () => { if (steamClients[username]) steamClients[username].isFarming = false; });
-
-    client.on('loginKey', (key) => {
-        const acc = accountsData.find(a => a.username === username);
-        if (acc) {
-            acc.loginKey = key;
-            savePersistentAccounts();
-        }
+    
+    client.on('loginKey', (key) => { 
+        const acc = accountsData.find(a => a.username === username); 
+        if (acc) { 
+            acc.loginKey = key; 
+            savePersistentAccounts(); 
+        } 
     });
-
+    
     client.on('sentry', (sentryHash) => {
         const acc = accountsData.find(a => a.username === username);
         if (acc) {
@@ -204,10 +235,10 @@ function savePersistentAccounts() {
 
 function initializeClients() {
     accountsData.forEach(acc => {
-        if (acc.loginKeyInvalid) acc.loginKeyInvalid = false;
         if (!steamClients[acc.username]) {
             const client = new SteamUser({ dataDirectory: null });
-            steamClients[acc.username] = { client, steamGuardCallback: null, isFarming: false, isLoggingIn: false };
+            // --- CORREÇÃO: Inicializa a propriedade para rastrear os jogos farmados ---
+            steamClients[acc.username] = { client, steamGuardCallback: null, isFarming: false, isLoggingIn: false, currentlyFarming: [] };
             setupSteamClientEvents(acc.username, client);
         }
     });
@@ -241,9 +272,9 @@ app.post('/api/accounts', async (req, res) => {
         return res.status(409).json({ message: `Conta '${username}' já existe.` });
     }
     const appidsWithProgress = appids.map(appid => ({ appid, goalMinutes: 0, farmedMinutes: 0 }));
-    const newAccount = { username, displayName, appids: appidsWithProgress, farmMode: 'infinite', loginKey: null, sentry: null, avatarHash: null, profileName: null, completedGoals: [] };
+    const newAccount = { username, displayName, appids: appidsWithProgress, farmMode: 'infinite', loginKey: null, sentry: null, avatarHash: null, profileName: null, completedGoals: [], isFarmingOffline: false };
     accountsData.push(newAccount);
-
+    
     initializeClients();
     loginAccount(username, password, true);
     await fetchAndAssignGameDetails(newAccount);
@@ -258,23 +289,66 @@ app.post('/api/accounts/:username/farm-mode', async (req, res) => {
     if (!account) return res.status(404).json({ message: 'Conta não encontrada.' });
 
     account.farmMode = mode;
-    if (mode === 'goal' && appids) {
-        const newAppidsWithProgress = appids.map(newGame => {
-            const existingGame = account.appids.find(oldGame => oldGame.appid === newGame.appid);
-            return {
-                ...newGame,
-                farmedMinutes: existingGame ? existingGame.farmedMinutes : 0
-            };
-        });
-        account.appids = newAppidsWithProgress;
-    } else if (mode === 'infinite') {
-        account.appids.forEach(game => game.goalMinutes = 0);
+    const newAppIds = new Set(appids.map(g => g.appid));
+
+    const updatedAppids = appids.map(newGame => {
+        const existingGame = account.appids.find(oldGame => oldGame.appid === newGame.appid);
+        return {
+            appid: newGame.appid,
+            goalMinutes: mode === 'goal' ? newGame.goalMinutes : 0,
+            farmedMinutes: existingGame ? existingGame.farmedMinutes : 0
+        };
+    });
+
+    account.appids = updatedAppids;
+    account.completedGoals = account.completedGoals?.filter(goal => newAppIds.has(goal.appid));
+    await fetchAndAssignGameDetails(account);
+
+    const clientData = steamClients[username];
+    if (clientData && clientData.isFarming) {
+        startFarming(username);
     }
 
-    await fetchAndAssignGameDetails(account);
     savePersistentAccounts();
-    res.status(200).json({ message: `Modo de farm definido para '${mode}'.`, account });
+    res.status(200).json({ message: `Modo de farm atualizado.`, account });
 });
+
+app.post('/api/accounts/:username/relogin', (req, res) => {
+    const { username } = req.params;
+    const { password } = req.body;
+    const account = accountsData.find(acc => acc.username === username);
+    const clientData = steamClients[username];
+
+    if (!account || !clientData) {
+        return res.status(404).json({ message: 'Conta não encontrada.' });
+    }
+    if (!password) {
+        return res.status(400).json({ message: 'Senha é obrigatória.' });
+    }
+
+    console.log(`Tentando relogin para '${username}' com nova senha.`);
+    loginAccount(username, password, true);
+    savePersistentAccounts();
+    res.status(200).json({ message: 'Tentativa de relogin iniciada.' });
+});
+
+app.post('/api/accounts/:username/toggle-offline', (req, res) => {
+    const { username } = req.params;
+    const account = accountsData.find(acc => acc.username === username);
+    if (!account) return res.status(404).json({ message: 'Conta não encontrada.' });
+
+    account.isFarmingOffline = !account.isFarmingOffline;
+    
+    const clientData = steamClients[username];
+    if (clientData && clientData.isFarming && clientData.client.steamID) {
+        const personaState = account.isFarmingOffline ? SteamUser.EPersonaState.Offline : SteamUser.EPersonaState.Online;
+        clientData.client.setPersona(personaState);
+    }
+
+    savePersistentAccounts();
+    res.status(200).json({ message: 'Modo de farm offline atualizado.', isFarmingOffline: account.isFarmingOffline });
+});
+
 
 app.post('/api/accounts/:username/steam-guard', (req, res) => {
     const { username } = req.params;
@@ -294,7 +368,7 @@ app.post('/api/accounts/:username/toggle-farm', (req, res) => {
     const clientData = steamClients[username];
     const account = accountsData.find(acc => acc.username === username);
     if (!clientData || !account) return res.status(404).json({ message: 'Conta não encontrada.' });
-    if (!account.farmMode) return res.status(400).json({ message: 'Defina um modo de farm antes de iniciar.' });
+    if (!account.farmMode) return res.status(400).json({ message: 'Defina um modo de farm antes de iniciar.'});
     if (!clientData.client.steamID) return res.status(409).json({ message: 'A conta não está logada.' });
 
     if (clientData.isFarming) {
@@ -325,5 +399,6 @@ app.delete('/api/accounts/:username', (req, res) => {
 if (!fs.existsSync(SENTRY_DIR)) fs.mkdirSync(SENTRY_DIR, { recursive: true });
 loadPersistentAccounts();
 app.listen(port, '0.0.0.0', () => {
-    console.log(`Servidor rodando em http://localhost:${port}`);
+  console.log(`Servidor rodando em http://localhost:${port}`);
 });
+
