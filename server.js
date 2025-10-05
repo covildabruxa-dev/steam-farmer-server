@@ -1,4 +1,4 @@
-// server.js - VERSÃO CORRIGIDA PARA O ERRO '...map is not a function'
+// server.js - VERSÃO CORRIGIDA COM ROTA PARA MANTER O SERVIDOR ATIVO
 
 const express = require('express');
 const path = require('path');
@@ -6,19 +6,22 @@ const fs = require('fs');
 const https = require('https');
 const SteamUser = require('steam-user');
 
+// --- AJUSTE PARA O RENDER ---
+const DATA_DIR = process.env.RENDER_DISK_MOUNT_PATH || __dirname;
+const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
+const SENTRY_DIR = path.join(DATA_DIR, 'sentry');
+// --- FIM DO AJUSTE ---
 
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
 
-const DATA_DIR = process.env.RENDER_DISK_MOUNT_PATH || __dirname;
-const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
-const SENTRY_DIR = path.join(DATA_DIR, 'sentry');
 const steamClients = {};
 let accountsData = [];
 const TRACKING_INTERVAL = 60000; // 1 minuto
 
 setInterval(() => {
+    // ... (todo o seu código de setInterval continua aqui, sem alterações)
     let hasChanges = false;
     accountsData.forEach(account => {
         const clientData = steamClients[account.username];
@@ -42,13 +45,11 @@ setInterval(() => {
                     }
                 });
 
-                // --- CORREÇÃO: Compara com a lista de jogos que NÓS estamos controlando ---
                 const currentFarmingIds = (clientData.currentlyFarming || []).map(g => g.game_id).sort();
                 const newFarmingIds = activeGamesToFarm.map(g => g.game_id).sort();
 
                 if (JSON.stringify(currentFarmingIds) !== JSON.stringify(newFarmingIds)) {
                     clientData.client.gamesPlayed(activeGamesToFarm);
-                    // --- CORREÇÃO: Atualiza nossa lista local de jogos farmados ---
                     clientData.currentlyFarming = activeGamesToFarm;
                 }
 
@@ -64,6 +65,8 @@ setInterval(() => {
     if (hasChanges) savePersistentAccounts();
 }, TRACKING_INTERVAL);
 
+
+// --- O restante das suas funções (getGameDetails, startFarming, etc.) continuam aqui, sem alterações ---
 function getGameDetails(appid) {
     return new Promise((resolve) => {
         https.get(`https://store.steampowered.com/api/appdetails?appids=${appid}&l=brazilian`, (res) => { // l=brazilian para nomes em PT-BR
@@ -105,7 +108,6 @@ async function startFarming(username) {
         clientData.client.setPersona(personaState);
         clientData.client.gamesPlayed(gamesToFarm);
 
-        // --- CORREÇÃO: Salva o estado dos jogos que estamos farmando ---
         clientData.currentlyFarming = gamesToFarm;
 
         await fetchAndAssignGameDetails(account);
@@ -124,7 +126,6 @@ function stopFarming(username) {
         }
         clientData.isFarming = false;
         
-        // --- CORREÇÃO: Limpa o nosso estado de jogos farmados ---
         clientData.currentlyFarming = [];
 
         console.log(`⏹️ Farm parado para '${username}'.`);
@@ -237,7 +238,6 @@ function initializeClients() {
     accountsData.forEach(acc => {
         if (!steamClients[acc.username]) {
             const client = new SteamUser({ dataDirectory: null });
-            // --- CORREÇÃO: Inicializa a propriedade para rastrear os jogos farmados ---
             steamClients[acc.username] = { client, steamGuardCallback: null, isFarming: false, isLoggingIn: false, currentlyFarming: [] };
             setupSteamClientEvents(acc.username, client);
         }
@@ -255,8 +255,18 @@ function loadPersistentAccounts() {
     });
 }
 
+
 // ---- ROTAS DA API ----
+
+// --- NOVA ROTA: HEALTH CHECK PARA MANTER O SERVIDOR ATIVO ---
+app.get('/health', (req, res) => {
+    // Apenas loga no console do Render para sabermos que está funcionando
+    console.log(`Health check recebido às ${new Date().toLocaleTimeString()}`);
+    res.status(200).send('OK'); // Responde com sucesso
+});
+
 app.get('/api/accounts', (req, res) => {
+    // ... (suas outras rotas continuam aqui, sem alterações)
     const dataToSend = accountsData.map(acc => ({
         ...acc,
         isFarming: steamClients[acc.username]?.isFarming || false,
@@ -394,6 +404,7 @@ app.delete('/api/accounts/:username', (req, res) => {
     console.log(`🗑️ Conta '${username}' removida com sucesso.`);
     res.status(200).json({ message: `Conta '${username}' removida com sucesso.` });
 });
+
 
 // ---- INICIALIZAÇÃO ----
 if (!fs.existsSync(SENTRY_DIR)) fs.mkdirSync(SENTRY_DIR, { recursive: true });
