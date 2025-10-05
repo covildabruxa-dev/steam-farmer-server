@@ -1,6 +1,6 @@
 {
   "name": "steam-farmer-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Servidor para o farmer de horas da Steam.",
   "main": "server.js",
   "scripts": {
@@ -15,7 +15,6 @@
   "license": "ISC",
   "dependencies": {
     "express": "^4.18.2",
-    "firebase-admin": "^13.5.0",
     "steam-user": "^5.0.0"
   }
 }

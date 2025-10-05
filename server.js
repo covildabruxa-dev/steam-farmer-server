@@ -1,4 +1,4 @@
-// server.js - VERSÃO CORRIGIDA COM ROTA PARA MANTER O SERVIDOR ATIVO
+// server.js - VERSÃO PRONTA PARA DEPLOY NO RENDER
 
 const express = require('express');
 const path = require('path');
@@ -6,11 +6,10 @@ const fs = require('fs');
 const https = require('https');
 const SteamUser = require('steam-user');
 
-// --- AJUSTE PARA O RENDER ---
+// --- AJUSTE PARA O RENDER: USA O DISCO PERSISTENTE ---
 const DATA_DIR = process.env.RENDER_DISK_MOUNT_PATH || __dirname;
 const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
 const SENTRY_DIR = path.join(DATA_DIR, 'sentry');
-// --- FIM DO AJUSTE ---
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -21,7 +20,6 @@ let accountsData = [];
 const TRACKING_INTERVAL = 60000; // 1 minuto
 
 setInterval(() => {
-    // ... (todo o seu código de setInterval continua aqui, sem alterações)
     let hasChanges = false;
     accountsData.forEach(account => {
         const clientData = steamClients[account.username];
@@ -66,10 +64,9 @@ setInterval(() => {
 }, TRACKING_INTERVAL);
 
 
-// --- O restante das suas funções (getGameDetails, startFarming, etc.) continuam aqui, sem alterações ---
 function getGameDetails(appid) {
     return new Promise((resolve) => {
-        https.get(`https://store.steampowered.com/api/appdetails?appids=${appid}&l=brazilian`, (res) => { // l=brazilian para nomes em PT-BR
+        https.get(`https://store.steampowered.com/api/appdetails?appids=${appid}&l=brazilian`, (res) => {
             let data = '';
             res.on('data', (chunk) => { data += chunk; });
             res.on('end', () => {
@@ -258,15 +255,13 @@ function loadPersistentAccounts() {
 
 // ---- ROTAS DA API ----
 
-// --- NOVA ROTA: HEALTH CHECK PARA MANTER O SERVIDOR ATIVO ---
+// --- ROTA DE HEALTH CHECK PARA MANTER O SERVIDOR ATIVO ---
 app.get('/health', (req, res) => {
-    // Apenas loga no console do Render para sabermos que está funcionando
     console.log(`Health check recebido às ${new Date().toLocaleTimeString()}`);
-    res.status(200).send('OK'); // Responde com sucesso
+    res.status(200).send('OK');
 });
 
 app.get('/api/accounts', (req, res) => {
-    // ... (suas outras rotas continuam aqui, sem alterações)
     const dataToSend = accountsData.map(acc => ({
         ...acc,
         isFarming: steamClients[acc.username]?.isFarming || false,
@@ -412,4 +407,3 @@ loadPersistentAccounts();
 app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor rodando em http://localhost:${port}`);
 });
-
