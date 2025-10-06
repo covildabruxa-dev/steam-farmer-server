@@ -1,4 +1,4 @@
-// server.js - VERSÃO COM LOGS EM TEMPO REAL E BUSCA DE JOGOS DA BIBLIOTECA
+// server.js - VERSÃO COM LOGS EM TEMPO REAL E BUSCA DE JOGOS DA BIBLIOTECA (SEM MULTIPLICADOR)
 
 const express = require('express');
 const path = require('path');
@@ -111,31 +111,15 @@ async function fetchAndAssignGameDetails(account) {
 }
 
 function buildFarmList(account) {
-    const multiplier = Math.max(1, Math.min(31, account.farmMultiplier || 1));
-    let userGames = [];
-
     if (account.farmMode === 'goal') {
-        userGames = account.appids.filter(g => g.farmedMinutes < g.goalMinutes).map(g => ({ game_id: g.appid }));
-    } else {
-        userGames = account.appids.map(g => ({ game_id: g.appid }));
+        // Para o modo de metas, retorna apenas os jogos que ainda não atingiram a meta.
+        return account.appids
+            .filter(g => g.farmedMinutes < g.goalMinutes)
+            .map(g => ({ game_id: g.appid }));
+    } else { 
+        // Para o modo infinito, retorna todos os jogos selecionados.
+        return account.appids.map(g => ({ game_id: g.appid }));
     }
-
-    if (userGames.length >= multiplier) {
-        return userGames.slice(0, multiplier);
-    }
-
-    const gamesToFarm = [...userGames];
-    const userGameIds = new Set(userGames.map(g => g.game_id));
-    let fillerIndex = 0;
-
-    while (gamesToFarm.length < multiplier && fillerIndex < FILLER_APP_IDS.length) {
-        const fillerId = FILLER_APP_IDS[fillerIndex];
-        if (!userGameIds.has(fillerId)) {
-            gamesToFarm.push({ game_id: fillerId });
-        }
-        fillerIndex++;
-    }
-    return gamesToFarm;
 }
 
 async function startFarming(username) {
@@ -157,7 +141,7 @@ async function startFarming(username) {
         clientData.currentlyFarming = gamesToFarm;
 
         await fetchAndAssignGameDetails(account);
-        logMessage(`▶️ Iniciando farm para '${username}' com ${gamesToFarm.length} jogo(s) (Multiplicador: ${account.farmMultiplier || 1}x).`);
+        logMessage(`▶️ Iniciando farm para '${username}' com ${gamesToFarm.length} jogo(s).`);
     }
 }
 
@@ -313,7 +297,7 @@ app.post('/api/accounts', async (req, res) => {
     const { username, password, displayName, appids } = req.body;
     if (accountsData.some(acc => acc.username === username)) return res.status(409).json({ message: `Conta '${username}' já existe.` });
     const appidsWithProgress = appids.map(appid => ({ appid, goalMinutes: 0, farmedMinutes: 0 }));
-    const newAccount = { username, displayName, appids: appidsWithProgress, farmMode: 'infinite', loginKey: null, sentry: null, avatarHash: null, profileName: null, completedGoals: [], isFarmingOffline: false, isFarmEnabled: false, farmMultiplier: 1, ownedGames: [] };
+    const newAccount = { username, displayName, appids: appidsWithProgress, farmMode: 'infinite', loginKey: null, sentry: null, avatarHash: null, profileName: null, completedGoals: [], isFarmingOffline: false, isFarmEnabled: false, ownedGames: [] };
     accountsData.push(newAccount);
     
     initializeClients();
@@ -378,12 +362,11 @@ app.post('/api/accounts/:username/fetch-games', (req, res) => {
 
 app.post('/api/accounts/:username/farm-mode', async (req, res) => {
     const { username } = req.params;
-    const { mode, appids, farmMultiplier } = req.body;
+    const { mode, appids } = req.body;
     const account = accountsData.find(acc => acc.username === username);
     if (!account) return res.status(404).json({ message: 'Conta não encontrada.' });
 
     account.farmMode = mode;
-    account.farmMultiplier = parseInt(farmMultiplier, 10) || 1;
     const newAppIds = new Set(appids.map(g => g.appid));
 
     account.appids = appids.map(newGame => {
@@ -477,4 +460,3 @@ loadPersistentAccounts();
 app.listen(port, '0.0.0.0', () => {
   logMessage(`Servidor rodando em http://0.0.0.0:${port}`);
 });
-
